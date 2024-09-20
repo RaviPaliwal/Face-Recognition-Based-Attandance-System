@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Ensure proper mobile rendering and touch zooming -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Face Recognition System</title>
+    <!-- Link to external stylesheet -->
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.css') }}"
+    />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+      }
+      /* Navigation Bar */
+      .navbar {
+        background-color: #333;
+        overflow: hidden;
+      }
+      .navbar a {
+        float: left;
+        display: block;
+        color: #f2f2f2;
+        text-align: center;
+        padding: 14px 20px;
+        text-decoration: none;
+      }
+      .navbar a:hover {
+        background-color: #ddd;
+        color: black;
+      }
+      /* Container */
+      .container {
+        padding: 20px;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      h1 {
+        text-align: center;
+      }
+      form {
+        margin-bottom: 20px;
+      }
+      label {
+        display: block;
+        margin: 10px 0 5px;
+      }
+      input[type="text"],
+      input[type="file"] {
+        width: 100%;
+        padding: 8px;
+        margin-bottom: 10px;
+        box-sizing: border-box;
+      }
+      button {
+        background-color: #4caf50;
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+      /* Video Container */
+      #video-container {
+        text-align: center;
+        margin-top: 20px;
+        position: relative;
+        width: 100%;
+        max-width: 640px;
+        margin: 20px auto;
+      }
+      #video {
+        width: 100%;
+        height: auto;
+        border: 1px solid #ccc;
+      }
+      #bounding-box-canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+      #attendance-list,
+      #messages-list {
+        margin-top: 20px;
+      }
+      #attendance-list li,
+      #messages-list li {
+        list-style-type: none;
+        padding: 5px;
+      }
+      /* Responsive Styles */
+      @media screen and (max-width: 768px) {
+        .navbar a {
+          float: none;
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Navigation Bar -->
+    <div class="navbar">
+      <a href="#" onclick="startCapture()">Start Attendance</a>
+      <a href="#" onclick="stopCapture()">Stop Attendance</a>
+      <a href="{{ url_for('view_attendance') }}">View Attendance</a>
+    </div>
+
+    <div class="container">
+      <h1>Face Recognition System</h1>
+
+      <!-- Form to add a new student -->
+      <form
+        action="{{ url_for('add_student') }}"
+        method="post"
+        enctype="multipart/form-data"
+      >
+        <label for="name">Name:</label>
+        <input type="text" id="name" name="name" required />
+
+        <label for="image">Image:</label>
+        <input type="file" id="image" name="image" accept="image/*" required />
+
+        <button type="submit">Add Student</button>
+      </form>
+      <!-- Display Messages -->
+      <div id="messages-list"></div>
+      <!-- Video Feed and Controls -->
+      <div id="video-container">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="bounding-box-canvas"></canvas>
+      </div>
+    </div>
+
+    <script>
+      let videoStream = null;
+      const video = document.getElementById("video");
+      const boundingBoxCanvas = document.getElementById("bounding-box-canvas");
+      const boundingBoxContext = boundingBoxCanvas.getContext("2d");
+      let captureRunning = false;
+
+      async function startCapture() {
+        try {
+          videoStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+          });
+          video.srcObject = videoStream;
+          video.play();
+
+          captureRunning = true;
+          captureFrame();
+        } catch (err) {
+          console.error("Error accessing webcam: ", err);
+        }
+      }
+
+      function stopCapture() {
+        if (videoStream) {
+          videoStream.getTracks().forEach((track) => track.stop());
+          video.srcObject = null;
+          captureRunning = false;
+          boundingBoxContext.clearRect(
+            0,
+            0,
+            boundingBoxCanvas.width,
+            boundingBoxCanvas.height
+          );
+        }
+      }
+
+      function updateCanvasSize() {
+        boundingBoxCanvas.width = video.videoWidth;
+        boundingBoxCanvas.height = video.videoHeight;
+      }
+
+      video.addEventListener("loadedmetadata", updateCanvasSize);
+
+      async function captureFrame() {
+        if (captureRunning && videoStream) {
+          const canvas = document.createElement("canvas");
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const context = canvas.getContext("2d");
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          const imageDataUrl = canvas.toDataURL("image/jpeg");
+
+          try {
+            const response = await fetch("/process_frame", {
+              method: "POST",
+              body: JSON.stringify({ image: imageDataUrl, stop: "False" }),
+              headers: { "Content-Type": "application/json" },
+            });
+            const data = await response.json();
+
+            // Clear previous bounding boxes and names
+            boundingBoxContext.clearRect(
+              0,
+              0,
+              boundingBoxCanvas.width,
+              boundingBoxCanvas.height
+            );
+
+            // Draw new bounding boxes and names
+            if (data.bounding_boxes) {
+              for (const [name, box] of Object.entries(data.bounding_boxes)) {
+                const [top, left, bottom, right] = box;
+
+                // Draw bounding box
+                boundingBoxContext.strokeStyle = "#4CAF50";
+                boundingBoxContext.lineWidth = 2;
+                boundingBoxContext.strokeRect(
+                  left,
+                  top,
+                  right - left,
+                  bottom - top
+                );
+
+                // Draw name
+                boundingBoxContext.font = "16px Arial";
+                boundingBoxContext.fillStyle = "#4CAF50";
+                boundingBoxContext.fillText(
+                  name,
+                  left,
+                  top > 20 ? top - 10 : 10
+                );
+              }
+            }
+
+            // Update messages
+            const messagesList = document.getElementById("messages-list");
+            messagesList.innerHTML = "<center><h3>Messages</h3></center><ul>";
+            if (data.messages && data.messages.length > 0) {
+              data.messages.forEach((message) => {
+                const centerised = document.createElement("center");
+                const messageItem = document.createElement("li");
+                messageItem.textContent = message;
+                centerised.appendChild(messageItem);
+                messagesList.appendChild(centerised);
+              });
+            } else {
+              messagesList.innerHTML += "<li>No messages</li>";
+            }
+            messagesList.innerHTML += "</ul>";
+          } catch (error) {
+            console.error("Error processing frame:", error);
+          }
+
+          if (captureRunning) {
+            setTimeout(captureFrame, 1000); // Adjust as needed
+          }
+        }
+      }
+    </script>
+  </body>
+</html>
